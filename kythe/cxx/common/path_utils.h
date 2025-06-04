@@ -47,6 +47,9 @@ class PathCleaner {
   ///         error if the current directory cannot be determined.
   absl::StatusOr<std::string> Relativize(absl::string_view path) const;
 
+  /// \brief Returns the cleaned, absolute root path for this PathCleaner.
+  const std::string& root() const { return root_; }
+
  private:
   explicit PathCleaner(std::string root) : root_(std::move(root)) {}
 

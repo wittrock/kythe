@@ -224,7 +224,42 @@ class CanonicalizerTest : public ::testing::Test {
 
  private:
   std::vector<std::string> filesystem_;
+
+ protected:
+  // Helper to add a file and ensure it's cleaned up.
+  void AddFile(const std::string& name, const std::string& content = "") {
+    std::string path = JoinPath(root(), name);
+    FILE* f = fopen(path.c_str(), "w");
+    CHECK(f != nullptr) << "Failed to open " << path << " for writing.";
+    CHECK_EQ(content.size(), fwrite(content.data(), 1, content.size(), f));
+    CHECK_EQ(0, fclose(f));
+    filesystem_.push_back(path);
+  }
 };
+
+TEST_F(CanonicalizerTest, PathRealizerRelativizeComplex) {
+  // Structure:
+  // <root>/a/b/c/d
+  // <root>/a/b/out/default  (this will be the PathRealizer root)
+  AddDirectory("a");
+  AddDirectory("a/b");
+  AddDirectory("a/b/c");
+  AddFile("a/b/c/d"); // Target file
+  AddDirectory("a/b/out");
+  AddDirectory("a/b/out/default"); // PathRealizer root
+
+  std::string realizer_root_full_path = JoinPath(root(), "a/b/out/default");
+  std::string target_full_path = JoinPath(root(), "a/b/c/d");
+
+  absl::StatusOr<PathRealizer> realizer =
+      PathRealizer::Create(realizer_root_full_path);
+  ASSERT_TRUE(realizer.ok()) << realizer.status();
+
+  absl::StatusOr<std::string> relative_path =
+      realizer->Relativize(target_full_path);
+  ASSERT_TRUE(relative_path.ok()) << relative_path.status();
+  EXPECT_EQ("../../c/d", *relative_path);
+}
 
 TEST_F(CanonicalizerTest, CanonicalizerCleanPathOnly) {
   AddDirectory("concrete");
@@ -257,7 +292,10 @@ TEST_F(CanonicalizerTest, CanonicalizerPreferRelative) {
           .value();
   // link/file points somewhere outside of "base", so prefer the relative path,
   // even if it's an unresolved symlink.
-  EXPECT_EQ("link/file",
+  // The new PathRealizer will resolve "base/link/file" to "../elsewhere/file"
+  // relative to "base", as "base/link" -> "../elsewhere".
+  // This is a relative path, so kPreferRelative should return it.
+  EXPECT_EQ("../elsewhere/file",
             canonicalizer.Relativize(JoinPath(base, "link/subdir/../file"))
                 .value_or(""));
 }
@@ -274,7 +312,10 @@ TEST_F(CanonicalizerTest, CanonicalizerPreferReal) {
       PathCanonicalizer::Create(base, PathCanonicalizer::Policy::kPreferReal)
           .value();
   // Use the resolved path, even if it points outside of the base.
-  EXPECT_EQ(JoinPath(root(), "elsewhere/file"),
+  // The path should be relative to `base`.
+  // Real path of `base/link/file` is `{root()}/elsewhere/file`.
+  // Relative to `base` (which is `{root()}/base`), this is `../elsewhere/file`.
+  EXPECT_EQ("../elsewhere/file",
             canonicalizer.Relativize(JoinPath(base, "link/subdir/../file"))
                 .value_or(""));
   // Unless the link is bad, then use the cleaned path.

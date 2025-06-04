@@ -186,14 +186,69 @@ absl::StatusOr<std::string> PathRealizer::PathCache::FindOrInsert(K&& key,
 
 absl::StatusOr<std::string> PathRealizer::Relativize(
     absl::string_view path) const {
+  // Fallback to old behavior if path is not absolute or RealPath fails.
+  auto fallback_behavior = [this,
+                            path]() -> absl::StatusOr<std::string> {
+    if (absl::StatusOr<std::string> resolved = RealPath(path); resolved.ok()) {
+      return std::string(TrimPathPrefix(*std::move(resolved), root_));
+    } else {
+      return resolved.status();
+    }
+  };
+
+  if (!IsAbsolutePath(path)) {
+    return cache_->FindOrInsert(CleanPath(path), fallback_behavior);
+  }
+
   return cache_->FindOrInsert(
-      CleanPath(path), [this, path]() -> absl::StatusOr<std::string> {
-        if (absl::StatusOr<std::string> resolved = RealPath(path);
-            resolved.ok()) {
-          return std::string(TrimPathPrefix(*std::move(resolved), root_));
-        } else {
-          return resolved.status();
+      CleanPath(path),
+      [this, path, fallback_behavior]() -> absl::StatusOr<std::string> {
+        absl::StatusOr<std::string> current_path_real = RealPath(path);
+        if (!current_path_real.ok()) {
+          return fallback_behavior();
         }
+        // root_ is expected to be real path by constructor.
+        const std::string& root_real_str = root_;
+
+        std::string cleaned_current_path = CleanPath(*current_path_real);
+        std::string cleaned_root_path = CleanPath(root_real_str);
+
+        if (cleaned_current_path == cleaned_root_path) {
+          return ".";
+        }
+
+        std::vector<absl::string_view> current_components =
+            absl::StrSplit(cleaned_current_path, '/', SkipEmptyDot{});
+        std::vector<absl::string_view> root_components =
+            absl::StrSplit(cleaned_root_path, '/', SkipEmptyDot{});
+
+        size_t common_prefix_len = 0;
+        while (common_prefix_len < current_components.size() &&
+               common_prefix_len < root_components.size() &&
+               current_components[common_prefix_len] ==
+                   root_components[common_prefix_len]) {
+          common_prefix_len++;
+        }
+
+        std::vector<std::string> relative_parts;
+        // Add "../" for each remaining component in the root path.
+        for (size_t i = common_prefix_len; i < root_components.size(); ++i) {
+          relative_parts.push_back("..");
+        }
+
+        // Add remaining components from the current path.
+        for (size_t i = common_prefix_len; i < current_components.size(); ++i) {
+          relative_parts.push_back(std::string(current_components[i]));
+        }
+
+        if (relative_parts.empty()) {
+          // This can happen if current_path is a parent of root_path,
+          // which should ideally be handled by RealPath and CleanPath,
+          // but as a safeguard.
+          return ".";
+        }
+
+        return absl::StrJoin(relative_parts, "/");
       });
 }
 
@@ -245,9 +300,15 @@ absl::StatusOr<std::string> PathCanonicalizer::Relativize(
       }
       return cleaner_.Relativize(path);
     case Policy::kPreferReal:
+      // If a realizer is available, use it. PathRealizer::Relativize will
+      // return the RealPath of the input, expressed relative to the
+      // PathRealizer's root (which is the same as this PathCanonicalizer's
+      // root).
       if (auto resolved = MaybeRealPath(realizer_, path)) {
         return *std::move(resolved);
       }
+      // Fallback if MaybeRealPath failed (e.g., RealPath within it failed) or
+      // no realizer. Default to cleaner's behavior for the path.
       return cleaner_.Relativize(path);
     case Policy::kCleanOnly:
       return cleaner_.Relativize(path);
