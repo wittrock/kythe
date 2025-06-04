@@ -116,20 +116,7 @@ absl::StatusOr<std::optional<PathRealizer>> MaybeMakeRealizer(
   return {std::nullopt};
 }
 
-// TODO(issue/3308): This function is no longer suitable due to PathCanonicalizer
-// needing to call specific PathRealizer methods.
-// std::optional<std::string> MaybeRealPath(
-//     const std::optional<PathRealizer>& realizer, absl::string_view path_to_resolve) {
-//   if (realizer.has_value()) {
-//     // This previously called the primary PathRealizer::Relativize
-//     if (auto result = realizer->Relativize(path_to_resolve); result.ok()) {
-//       return *std::move(result);
-//     } else {
-//       LOG(ERROR) << "Unable to resolve " << path_to_resolve << ": " << result.status();
-//     }
-//   }
-//   return std::nullopt;
-// }
+// MaybeRealPath was here; removed as it's no longer used.
 
 struct PathParts {
   absl::string_view dir, base;
