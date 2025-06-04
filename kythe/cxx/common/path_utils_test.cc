@@ -294,8 +294,9 @@ TEST_F(CanonicalizerTest, CanonicalizerPreferRelative) {
   // even if it's an unresolved symlink.
   // The new PathRealizer will resolve "base/link/file" to "../elsewhere/file"
   // relative to "base", as "base/link" -> "../elsewhere".
-  // This is a relative path, so kPreferRelative should return it.
-  EXPECT_EQ("../elsewhere/file",
+  // Since this starts with "..", kPreferRelative falls back to the cleaner.
+  // Cleaner (root "base") on "base/link/file" results in "link/file".
+  EXPECT_EQ("link/file",
             canonicalizer.Relativize(JoinPath(base, "link/subdir/../file"))
                 .value_or(""));
 }
@@ -314,8 +315,9 @@ TEST_F(CanonicalizerTest, CanonicalizerPreferReal) {
   // Use the resolved path, even if it points outside of the base.
   // The path should be relative to `base`.
   // Real path of `base/link/file` is `{root()}/elsewhere/file`.
-  // Relative to `base` (which is `{root()}/base`), this is `../elsewhere/file`.
-  EXPECT_EQ("../elsewhere/file",
+  // Policy kPreferReal with RelativizeWithoutUpwardNavigation on a path external
+  // to 'base' (the root) via symlink should return the absolute real path.
+  EXPECT_EQ(JoinPath(root(), "elsewhere/file"),
             canonicalizer.Relativize(JoinPath(base, "link/subdir/../file"))
                 .value_or(""));
   // Unless the link is bad, then use the cleaned path.

@@ -76,6 +76,13 @@ class PathRealizer {
   ///         an error if the path cannot be resolved.
   absl::StatusOr<std::string> Relativize(absl::string_view path) const;
 
+  /// \brief Transforms the resolved, absolute version of `path` into a path
+  ///        relative to the configured root, but only if `path` is a descendant
+  ///        of `root_`. Otherwise, returns the resolved absolute path of `path`.
+  ///        Does not produce `../` components.
+  absl::StatusOr<std::string> RelativizeWithoutUpwardNavigation(
+      absl::string_view path) const;
+
  private:
   class PathCache {
    public:

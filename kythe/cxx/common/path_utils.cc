@@ -57,6 +57,23 @@ struct SkipEmptyDot {
 };
 
 // Deal with relative paths as well as '/' and '//'.
+// TODO(issue/3308): This function is unused. Remove it.
+// absl::string_view PathPrefix(absl::string_view path) {
+// int slash_count = 0;
+//   for (char ch : path) {
+//     if (ch == '/' && ++slash_count <= 2) continue;
+//     break;
+//   }
+//   switch (slash_count) {
+//     case 0:
+//       return "";
+//     case 2:
+//       return "//";
+//     default:
+//       return "/";
+//   }
+// }
+
 absl::string_view PathPrefix(absl::string_view path) {
   int slash_count = 0;
   for (char ch : path) {
@@ -99,17 +116,20 @@ absl::StatusOr<std::optional<PathRealizer>> MaybeMakeRealizer(
   return {std::nullopt};
 }
 
-std::optional<std::string> MaybeRealPath(
-    const std::optional<PathRealizer>& realizer, absl::string_view root) {
-  if (realizer.has_value()) {
-    if (auto result = realizer->Relativize(root); result.ok()) {
-      return *std::move(result);
-    } else {
-      LOG(ERROR) << "Unable to resolve " << root << ": " << result.status();
-    }
-  }
-  return std::nullopt;
-}
+// TODO(issue/3308): This function is no longer suitable due to PathCanonicalizer
+// needing to call specific PathRealizer methods.
+// std::optional<std::string> MaybeRealPath(
+//     const std::optional<PathRealizer>& realizer, absl::string_view path_to_resolve) {
+//   if (realizer.has_value()) {
+//     // This previously called the primary PathRealizer::Relativize
+//     if (auto result = realizer->Relativize(path_to_resolve); result.ok()) {
+//       return *std::move(result);
+//     } else {
+//       LOG(ERROR) << "Unable to resolve " << path_to_resolve << ": " << result.status();
+//     }
+//   }
+//   return std::nullopt;
+// }
 
 struct PathParts {
   absl::string_view dir, base;
@@ -252,6 +272,15 @@ absl::StatusOr<std::string> PathRealizer::Relativize(
       });
 }
 
+absl::StatusOr<std::string> PathRealizer::RelativizeWithoutUpwardNavigation(
+    absl::string_view path) const {
+  if (absl::StatusOr<std::string> resolved = RealPath(path); resolved.ok()) {
+    return std::string(TrimPathPrefix(*std::move(resolved), root_));
+  } else {
+    return resolved.status();
+  }
+}
+
 absl::StatusOr<PathCanonicalizer> PathCanonicalizer::Create(
     absl::string_view root, Policy policy,
     absl::Span<const PathEntry> path_map) {
@@ -293,22 +322,39 @@ absl::StatusOr<std::string> PathCanonicalizer::Relativize(
 
   switch (*policy) {
     case Policy::kPreferRelative:
-      if (auto resolved = MaybeRealPath(realizer_, path)) {
-        if (!IsAbsolutePath(*resolved)) {
-          return *std::move(resolved);
+      if (realizer_.has_value()) {
+        if (auto real_relative_path_status = realizer_->Relativize(path);
+            real_relative_path_status.ok()) {
+          // Check if the path starts with ".." or is absolute.
+          // If so, it's not "local enough" or is an issue, fallback to cleaner.
+          absl::string_view rrp_view = *real_relative_path_status;
+          if (!(absl::StartsWith(rrp_view, "..") ||
+                IsAbsolutePath(rrp_view))) {
+            return *std::move(real_relative_path_status);
+          }
+          // If it starts with ".." or is absolute, fall through to cleaner.
+        } else {
+          LOG(ERROR) << "PathRealizer::Relativize failed for " << path << ": "
+                     << real_relative_path_status.status();
+          // Fall through to cleaner if Relativize itself failed.
         }
       }
-      return cleaner_.Relativize(path);
+      return cleaner_.Relativize(path); // Fallback.
     case Policy::kPreferReal:
-      // If a realizer is available, use it. PathRealizer::Relativize will
-      // return the RealPath of the input, expressed relative to the
-      // PathRealizer's root (which is the same as this PathCanonicalizer's
-      // root).
-      if (auto resolved = MaybeRealPath(realizer_, path)) {
-        return *std::move(resolved);
+      if (realizer_.has_value()) {
+        if (auto resolved =
+                realizer_->RelativizeWithoutUpwardNavigation(path);
+            resolved.ok()) {
+          return *std::move(resolved);
+        } else {
+          LOG(ERROR)
+              << "PathRealizer::RelativizeWithoutUpwardNavigation failed for "
+              << path << ": " << resolved.status();
+          // Fall through to cleaner if RelativizeWithoutUpwardNavigation failed
+          // (e.g. RealPath inside it failed).
+        }
       }
-      // Fallback if MaybeRealPath failed (e.g., RealPath within it failed) or
-      // no realizer. Default to cleaner's behavior for the path.
+      // Fallback if no realizer or if the realizer call failed.
       return cleaner_.Relativize(path);
     case Policy::kCleanOnly:
       return cleaner_.Relativize(path);
